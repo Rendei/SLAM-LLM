@@ -95,6 +95,9 @@ def setup_encoder(train_config, model_config, **kwargs):
         if encoder_name == "hubert":
             from slam_llm.models.encoder import HubertEncoder
             encoder = HubertEncoder.load(model_config)
+        if encoder_name == "hubert_hf" or encoder_name == "hf_hubert":
+            from slam_llm.models.encoder import HfHubertEncoder
+            encoder = HfHubertEncoder.load(model_config)
         if encoder_name == "musicfm":
             from slam_llm.models.encoder import MusicFMEncoder
             encoder = MusicFMEncoder.load(model_config)
@@ -339,6 +342,11 @@ class slam_model(nn.Module):
                 if self.model_config.encoder_type == "finetune":
                     encoder_outs, audio_mel_post_mask = results["encoder_out"], results["padding_mask"]
                     encoder_outs = encoder_outs.transpose(0, 1)
+            if self.model_config.encoder_name == "hubert_hf" or self.model_config.encoder_name == "hf_hubert":
+                encoder_outs = self.encoder.extract_features(audio, padding_mask=1 - audio_mask)
+                # HuggingFace models return features directly, no need for post_mask extraction
+                # Calculate post_mask based on output sequence length
+                audio_mel_post_mask = torch.ones(encoder_outs.size()[:-1], dtype=torch.long).to(encoder_outs.device)
             if self.model_config.encoder_name == "av_hubert":
                 results = self.encoder(source={'video':visual, 'audio':audio}, padding_mask=visual_mask) # bs*seq*dim  
                 encoder_outs, audio_mel_post_mask = results["encoder_out"], results["padding_mask"]

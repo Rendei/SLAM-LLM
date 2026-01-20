@@ -98,22 +98,55 @@ class slam_model_asr(slam_model):
         device = kwargs.get("device", "cuda")
         if os.path.exists(wav_path):  # Audio-Text QA
             import whisper
+            import soundfile as sf
 
-            audio_raw = whisper.load_audio(wav_path)
-            audio_raw = whisper.pad_or_trim(audio_raw)
+            # Determine input type based on encoder
+            input_type = getattr(self.dataset_config, "input_type", "raw")
+            
+            if input_type == "mel" or self.model_config.encoder_name == "whisper":
+                # Handle mel spectrogram input (for Whisper)
+                audio_raw = whisper.load_audio(wav_path)
+                audio_raw = whisper.pad_or_trim(audio_raw)
 
-            mel_size = getattr(
-                self.dataset_config, "mel_size", 80
-            )  # 80 for large v1 and v2, 128 for large v3
-            audio_mel = (
-                whisper.log_mel_spectrogram(audio_raw, n_mels=mel_size)
-                .permute(1, 0)[None, :, :]
-                .to(device)
-            )
+                mel_size = getattr(
+                    self.dataset_config, "mel_size", 80
+                )  # 80 for large v1 and v2, 128 for large v3
+                audio_mel = (
+                    whisper.log_mel_spectrogram(audio_raw, n_mels=mel_size)
+                    .permute(1, 0)[None, :, :]
+                    .to(device)
+                )
 
-            encoder_outs = self.encoder.extract_variable_length_features(
-                audio_mel.permute(0, 2, 1)
-            )
+                encoder_outs = self.encoder.extract_variable_length_features(
+                    audio_mel.permute(0, 2, 1)
+                )
+            else:
+                # Handle raw audio input (for hubert_hf, wavlm, etc.)
+                audio_raw, sr = sf.read(wav_path)
+                audio_raw = torch.from_numpy(audio_raw).float()
+                
+                # Resample to 16kHz if needed (Hubert expects 16kHz)
+                if sr != 16000:
+                    import torchaudio
+                    resampler = torchaudio.transforms.Resample(sr, 16000)
+                    audio_raw = resampler(audio_raw.unsqueeze(0)).squeeze(0)
+                
+                # Normalize if required
+                normalize = getattr(self.dataset_config, "normalize", False)
+                if normalize:
+                    audio_raw = torch.nn.functional.layer_norm(audio_raw, audio_raw.shape)
+                
+                # Add batch dimension and move to device
+                audio_raw = audio_raw.unsqueeze(0).to(device)  # [1, seq_len]
+                
+                # Extract features using encoder
+                if self.model_config.encoder_name == "hubert_hf" or self.model_config.encoder_name == "hf_hubert":
+                    encoder_outs = self.encoder.extract_features(audio_raw, padding_mask=None)
+                elif hasattr(self.encoder, "extract_features"):
+                    encoder_outs = self.encoder.extract_features(audio_raw, padding_mask=None)
+                else:
+                    # Fallback for other encoders
+                    encoder_outs = self.encoder(audio_raw)
 
             if self.model_config.encoder_projector == "q-former":
                 audio_mel_post_mask = torch.ones(

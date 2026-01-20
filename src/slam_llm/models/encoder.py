@@ -153,6 +153,65 @@ class HubertEncoder:
         return model
 
 
+class HfHubertEncoder(nn.Module):
+    """
+    HuggingFace Hubert encoder wrapper.
+    Supports models like 'facebook/hubert-base-ls960' from HuggingFace.
+    """
+    
+    def __init__(self, model, config):
+        super().__init__()
+        self.model = model
+        self.config = config
+    
+    @classmethod
+    def load(cls, model_config):
+        from transformers import HubertModel, AutoModel
+        
+        # Try to load as HubertModel first, fallback to AutoModel
+        try:
+            if hasattr(model_config, 'encoder_path_hf') and model_config.encoder_path_hf:
+                model_path = model_config.encoder_path_hf
+            else:
+                model_path = model_config.encoder_path
+            
+            # Try loading as HubertModel
+            try:
+                model = HubertModel.from_pretrained(model_path)
+            except:
+                # Fallback to AutoModel
+                model = AutoModel.from_pretrained(model_path)
+            
+            config = model.config
+            
+            return cls(model, config)
+        except Exception as e:
+            raise ValueError(f"Failed to load HuggingFace Hubert model from {model_config.encoder_path}: {e}")
+    
+    def extract_features(self, source, padding_mask=None):
+        """
+        Extract features from audio input.
+        
+        Args:
+            source: Audio input tensor [batch_size, sequence_length]
+            padding_mask: Padding mask (True/1 for padding, False/0 for valid)
+        
+        Returns:
+            torch.Tensor: Encoded features [batch_size, sequence_length, hidden_dim]
+        """
+        # Convert padding mask to attention mask format for HuggingFace
+        # HuggingFace expects: 1 for valid tokens, 0 for padding
+        if padding_mask is not None:
+            attention_mask = (1 - padding_mask).long()
+        else:
+            attention_mask = None
+        
+        # HuggingFace Hubert expects input_values
+        outputs = self.model(input_values=source, attention_mask=attention_mask)
+        
+        return outputs.last_hidden_state
+
+
 class HfTextEncoder:
 
     @classmethod
